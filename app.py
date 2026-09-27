@@ -81,6 +81,7 @@ html, body, [class*="css"], .stMarkdown, .stButton button, label, input {
 }
 .result.cancel { background: linear-gradient(135deg, #b91c1c, #ef4444); }
 .result.keep   { background: linear-gradient(135deg, #047857, #10b981); }
+.result.warn   { background: linear-gradient(135deg, #b45309, #f59e0b); }
 .result .icon  { font-size: 3rem; line-height: 1; }
 .result .label { font-size: .95rem; opacity: .9; }
 .result .title { font-size: 1.6rem; font-weight: 700; }
@@ -135,10 +136,12 @@ if submitted:
     pred = int(model.predict(X)[0])
     p_cancel = float(model.predict_proba(X)[0][list(model.classes_).index(1)])
 
-    if pred == 1:
+    if p_cancel >= 0.6:
         cls, icon, title = "cancel", "❌", "มีแนวโน้มยกเลิกการจอง"
-    else:
+    elif p_cancel <= 0.4:
         cls, icon, title = "keep", "✅", "มีแนวโน้มเข้าพักตามจอง"
+    else:
+        cls, icon, title = "warn", "⚠️", "ก้ำกึ่ง ควรติดตามใกล้ชิด"
 
     st.markdown(
         f"""

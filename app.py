@@ -36,8 +36,30 @@ if MODEL_PATH is None:
 
 model = load_model(MODEL_PATH)
 FEATURES = list(model.feature_names_in_)
-ROOM_TYPES = [f.removeprefix("reserved_room_type_") for f in FEATURES if f.startswith("reserved_room_type_")]
-COUNTRIES = [f.removeprefix("country_") for f in FEATURES if f.startswith("country_")]
+
+# ประเภทห้อง (ชื่อไทย -> รหัสห้องในโมเดล) เรียงตามระดับราคาเฉลี่ยจากข้อมูล
+ROOM_TYPES = {
+    "ห้องสแตนดาร์ด": "A",
+    "ห้องซูพีเรีย": "D",
+    "ห้องดีลักซ์": "F",
+    "ห้องสวีท": "H",
+}
+
+# 10 ประเทศที่พบมากที่สุดในข้อมูล (ชื่อไทย -> รหัส ISO) ที่เหลือรวมเป็น Other
+OTHER_LABEL = "อื่น ๆ (Other)"
+COUNTRIES = {
+    "โปรตุเกส": "PRT",
+    "สหราชอาณาจักร": "GBR",
+    "ฝรั่งเศส": "FRA",
+    "สเปน": "ESP",
+    "เยอรมนี": "DEU",
+    "อิตาลี": "ITA",
+    "ไอร์แลนด์": "IRL",
+    "เบลเยียม": "BEL",
+    "บราซิล": "BRA",
+    "เนเธอร์แลนด์": "NLD",
+    OTHER_LABEL: None,  # Other = ไม่ตั้งค่า one-hot ของประเทศใดเลย
+}
 
 
 def minmax(x, lo, hi):
@@ -118,8 +140,8 @@ with st.form("booking"):
 
     st.markdown('<div class="section">🛏️ ห้องพักและสัญชาติ</div>', unsafe_allow_html=True)
     c6, c7 = st.columns(2)
-    room = c6.selectbox("ประเภทห้อง", ROOM_TYPES)
-    country = c7.selectbox("ประเทศ", COUNTRIES, index=COUNTRIES.index("PRT") if "PRT" in COUNTRIES else 0)
+    room_label = c6.selectbox("ประเภทห้อง", list(ROOM_TYPES))
+    country_label = c7.selectbox("ประเทศ", list(COUNTRIES), index=0)
 
     submitted = st.form_submit_button("🔮 ทำนายผล", use_container_width=True)
 
@@ -129,8 +151,12 @@ if submitted:
     row["lead_time"] = minmax(lead_time, LEAD_TIME_MIN, LEAD_TIME_MAX)
     row["adr"] = minmax(adr, ADR_MIN, ADR_MAX)
     row["FamilySize"] = float(adults + children + babies)
-    row[f"reserved_room_type_{room}"] = 1.0
-    row[f"country_{country}"] = 1.0
+    room_col = f"reserved_room_type_{ROOM_TYPES[room_label]}"
+    if room_col in row:
+        row[room_col] = 1.0
+    country_code = COUNTRIES[country_label]
+    if country_code is not None and f"country_{country_code}" in row:
+        row[f"country_{country_code}"] = 1.0
 
     X = pd.DataFrame([row], columns=FEATURES)
     pred = int(model.predict(X)[0])

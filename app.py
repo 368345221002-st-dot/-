@@ -12,7 +12,7 @@ MODEL_NAME = "hotel_tree_.joblib"
 
 # ค่า MinMax ที่ใช้สเกล lead_time และ adr ตอนเทรน
 LEAD_TIME_MIN, LEAD_TIME_MAX = 0.0, 737.0
-ADR_MIN, ADR_MAX = 0.0, 510.0
+ADR_MIN, ADR_MAX = -6.38, 211.065
 
 
 def find_model_path():

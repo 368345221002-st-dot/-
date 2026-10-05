@@ -7,21 +7,17 @@ import streamlit as st
 st.set_page_config(page_title="Hotel Booking Cancellation", page_icon="🏨", layout="centered")
 
 # ---------------- โหลดโมเดล ----------------
+# โมเดลเป็น scikit-learn Pipeline (เติมค่าหาย + สเกล + One-hot + Gradient Boosting)
+# ได้จาก Experiment_002_030.ipynb จึงรับข้อมูลดิบได้โดยตรง ไม่ต้องสเกลเอง
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_NAME = "hotel_tree_.joblib"
+MODEL_NAME = "hotel_cancel_model.joblib"
 
-# ค่า MinMax ที่ใช้สเกล lead_time และ adr ตอนเทรน
-LEAD_TIME_MIN, LEAD_TIME_MAX = 0.0, 737.0
-ADR_MIN, ADR_MAX = -6.38, 211.065
+# ขอบบน ADR (Q3 + 1.5 IQR) ที่คำนวณจาก training set (summary.json: adr_upper)
+ADR_UPPER = 227.388
+LEAD_TIME_MAX = 737
 
-
-def find_model_path():
-    exact = os.path.join(APP_DIR, MODEL_NAME)
-    if os.path.isfile(exact):
-        return exact
-    files = [f for f in os.listdir(APP_DIR) if ".joblib" in f.lower()]
-    files.sort(key=lambda f: "hotel_tree" not in f.lower())
-    return os.path.join(APP_DIR, files[0]) if files else None
+# เกณฑ์ 3 ระดับ เลือกจาก out-of-fold probability บน training set (ตาราง T4)
+LOW_T, HIGH_T = 0.40, 0.60
 
 
 @st.cache_resource
@@ -29,15 +25,14 @@ def load_model(path):
     return joblib.load(path)
 
 
-MODEL_PATH = find_model_path()
-if MODEL_PATH is None:
+MODEL_PATH = os.path.join(APP_DIR, MODEL_NAME)
+if not os.path.isfile(MODEL_PATH):
     st.error(f"ไม่พบไฟล์โมเดล {MODEL_NAME} — วางไว้โฟลเดอร์เดียวกับ app.py")
     st.stop()
 
 model = load_model(MODEL_PATH)
-FEATURES = list(model.feature_names_in_)
 
-# ประเภทห้อง (ชื่อไทย -> รหัสห้องในโมเดล) เรียงตามระดับราคาเฉลี่ยจากข้อมูล
+# ประเภทห้อง (ชื่อไทย -> รหัสห้องในข้อมูล) เรียงตามระดับราคาเฉลี่ยจากข้อมูล
 ROOM_TYPES = {
     "ห้องสแตนดาร์ด": "A",
     "ห้องซูพีเรีย": "D",
@@ -45,7 +40,7 @@ ROOM_TYPES = {
     "ห้องสวีท": "H",
 }
 
-# 10 ประเทศที่พบมากที่สุดในข้อมูล (ชื่อไทย -> รหัส ISO) ที่เหลือรวมเป็น Other
+# 10 ประเทศที่พบมากที่สุดใน training set (ตรงกับที่โมเดลเก็บไว้) ที่เหลือโมเดลรวมเป็น "อื่น ๆ"
 OTHER_LABEL = "อื่น ๆ (Other)"
 COUNTRIES = {
     "โปรตุเกส": "PRT",
@@ -58,12 +53,8 @@ COUNTRIES = {
     "เบลเยียม": "BEL",
     "บราซิล": "BRA",
     "เนเธอร์แลนด์": "NLD",
-    OTHER_LABEL: None,  # Other = ไม่ตั้งค่า one-hot ของประเทศใดเลย
+    OTHER_LABEL: "OTHER",  # ค่าที่ไม่อยู่ใน 10 ประเทศ -> หมวด infrequent ของ One-hot
 }
-
-
-def minmax(x, lo, hi):
-    return (x - lo) / (hi - lo)
 
 
 # ---------------- สไตล์ ----------------
@@ -129,8 +120,8 @@ st.markdown(
 with st.form("booking"):
     st.markdown('<div class="section">📅 ข้อมูลการจอง</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
-    lead_time = c1.number_input("จองล่วงหน้า (วัน)", min_value=0, max_value=int(LEAD_TIME_MAX), value=30)
-    adr = c2.number_input("ราคาเฉลี่ยต่อคืน (ADR)", min_value=0.0, max_value=ADR_MAX, value=100.0, step=5.0)
+    lead_time = c1.number_input("จองล่วงหน้า (วัน)", min_value=0, max_value=LEAD_TIME_MAX, value=30)
+    adr = c2.number_input("ราคาเฉลี่ยต่อคืน (ADR)", min_value=0.0, max_value=1000.0, value=100.0, step=5.0)
 
     st.markdown('<div class="section">👨‍👩‍👧 จำนวนผู้เข้าพัก</div>', unsafe_allow_html=True)
     c3, c4, c5 = st.columns(3)
@@ -147,27 +138,21 @@ with st.form("booking"):
 
 # ---------------- ทำนาย ----------------
 if submitted:
-    row = dict.fromkeys(FEATURES, 0.0)
-    row["lead_time"] = minmax(lead_time, LEAD_TIME_MIN, LEAD_TIME_MAX)
-    row["adr"] = minmax(adr, ADR_MIN, ADR_MAX)
-    row["FamilySize"] = float(adults + children + babies)
-    room_col = f"reserved_room_type_{ROOM_TYPES[room_label]}"
-    if room_col in row:
-        row[room_col] = 1.0
-    country_code = COUNTRIES[country_label]
-    if country_code is not None and f"country_{country_code}" in row:
-        row[f"country_{country_code}"] = 1.0
-
-    X = pd.DataFrame([row], columns=FEATURES)
-    pred = int(model.predict(X)[0])
+    X = pd.DataFrame([{
+        "lead_time": float(lead_time),
+        "adr": min(float(adr), ADR_UPPER),          # ตัดค่าเกินขอบบนเหมือนตอนเทรน
+        "FamilySize": float(adults + children + babies),
+        "reserved_room_type": ROOM_TYPES[room_label],
+        "country": COUNTRIES[country_label],
+    }])
     p_cancel = float(model.predict_proba(X)[0][list(model.classes_).index(1)])
 
-    if p_cancel >= 0.6:
-        cls, icon, title = "cancel", "❌", "มีแนวโน้มยกเลิกการจอง"
-    elif p_cancel <= 0.4:
-        cls, icon, title = "keep", "✅", "มีแนวโน้มเข้าพักตามจอง"
+    if p_cancel >= HIGH_T:
+        cls, icon, title = "cancel", "❌", "ความเสี่ยงสูง: มีแนวโน้มยกเลิกการจอง"
+    elif p_cancel <= LOW_T:
+        cls, icon, title = "keep", "✅", "ความเสี่ยงต่ำ: มีแนวโน้มเข้าพักตามจอง"
     else:
-        cls, icon, title = "warn", "⚠️", "ก้ำกึ่ง ควรติดตามใกล้ชิด"
+        cls, icon, title = "warn", "⚠️", "ความเสี่ยงปานกลาง: ควรติดตามใกล้ชิด"
 
     st.markdown(
         f"""

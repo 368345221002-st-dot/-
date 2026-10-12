@@ -1,13 +1,3 @@
-"""
-ระบบเว็บทำนายความเสี่ยงการยกเลิกการจองโรงแรม (ฉบับ V2)
-
-โหลด Pipeline ของตัวแบบ WEB5 + HGB ที่บันทึกจากโน้ตบุ๊กการทดลอง
-ซึ่งเป็นไฟล์เดียวกับที่ใช้รายงานผลในบทความ (หัวข้อ 2.7, 3.6)
-
-ฟีเจอร์ WEB5 (ค่าดิบ ไม่ต้องสเกลเอง Pipeline จัดการให้):
-    lead_time, adr, FamilySize, reserved_room_type, country
-"""
-
 import os
 
 import joblib
@@ -16,21 +6,38 @@ import streamlit as st
 
 st.set_page_config(page_title="Hotel Booking Cancellation", page_icon="🏨", layout="centered")
 
-# ---------------- ค่าคงที่ ----------------
+# ---------------- โหลดโมเดล ----------------
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_NAME = "hgb_web5_pipeline.joblib"
-MODEL_PATH = os.path.join(APP_DIR, MODEL_NAME)
+MODEL_NAME = "hotel_tree_.joblib"
 
-# ขอบบน ADR ที่คำนวณจากชุดฝึก (หัวข้อ 2.2) — ต้องตรงกับ adr_cap ใน results_data.json
-ADR_CAP = 227.388
+# ค่า MinMax ที่ใช้สเกล lead_time และ adr ตอนเทรน
+LEAD_TIME_MIN, LEAD_TIME_MAX = 0.0, 737.0
+ADR_MIN, ADR_MAX = -6.38, 211.065
 
-# เกณฑ์ระดับความเสี่ยงเชิงปฏิบัติ (หัวข้อ 2.6)
-T_LOW, T_HIGH = 0.40, 0.60
 
-# ชื่อคอลัมน์ที่ Pipeline ต้องได้รับ (ต้องตรงกับตอนฝึก)
-WEB5_FEATURES = ["lead_time", "adr", "FamilySize", "reserved_room_type", "country"]
+def find_model_path():
+    exact = os.path.join(APP_DIR, MODEL_NAME)
+    if os.path.isfile(exact):
+        return exact
+    files = [f for f in os.listdir(APP_DIR) if ".joblib" in f.lower()]
+    files.sort(key=lambda f: "hotel_tree" not in f.lower())
+    return os.path.join(APP_DIR, files[0]) if files else None
 
-# ประเภทห้อง (ชื่อไทย -> รหัสห้องในข้อมูล) เรียงตามระดับราคาเฉลี่ยจากข้อมูล
+
+@st.cache_resource
+def load_model(path):
+    return joblib.load(path)
+
+
+MODEL_PATH = find_model_path()
+if MODEL_PATH is None:
+    st.error(f"ไม่พบไฟล์โมเดล {MODEL_NAME} — วางไว้โฟลเดอร์เดียวกับ app.py")
+    st.stop()
+
+model = load_model(MODEL_PATH)
+FEATURES = list(model.feature_names_in_)
+
+# ประเภทห้อง (ชื่อไทย -> รหัสห้องในโมเดล) เรียงตามระดับราคาเฉลี่ยจากข้อมูล
 ROOM_TYPES = {
     "ห้องสแตนดาร์ด": "A",
     "ห้องซูพีเรีย": "D",
@@ -38,10 +45,8 @@ ROOM_TYPES = {
     "ห้องสวีท": "H",
 }
 
-# 10 ประเทศที่พบมากที่สุดในข้อมูล (ชื่อไทย -> รหัส ISO)
-# "อื่น ๆ" ส่งรหัสที่ไม่อยู่ใน 10 อันดับ Pipeline จะจัดเข้าหมวด "อื่น ๆ" เอง
+# 10 ประเทศที่พบมากที่สุดในข้อมูล (ชื่อไทย -> รหัส ISO) ที่เหลือรวมเป็น Other
 OTHER_LABEL = "อื่น ๆ (Other)"
-OTHER_CODE = "OTHER"
 COUNTRIES = {
     "โปรตุเกส": "PRT",
     "สหราชอาณาจักร": "GBR",
@@ -53,41 +58,12 @@ COUNTRIES = {
     "เบลเยียม": "BEL",
     "บราซิล": "BRA",
     "เนเธอร์แลนด์": "NLD",
-    OTHER_LABEL: OTHER_CODE,
+    OTHER_LABEL: None,  # Other = ไม่ตั้งค่า one-hot ของประเทศใดเลย
 }
 
 
-# ---------------- โหลดตัวแบบ ----------------
-@st.cache_resource
-def load_model(path):
-    return joblib.load(path)
-
-
-if not os.path.isfile(MODEL_PATH):
-    st.error(f"ไม่พบไฟล์ตัวแบบ {MODEL_NAME} — วางไว้โฟลเดอร์เดียวกับ app.py")
-    st.stop()
-
-model = load_model(MODEL_PATH)
-
-# ตรวจว่าไฟล์ที่โหลดเป็น Pipeline ที่รับฟีเจอร์ WEB5 จริง ไม่ใช่ตัวแบบรุ่นเก่า
-model_features = list(getattr(model, "feature_names_in_", []))
-if sorted(model_features) != sorted(WEB5_FEATURES):
-    st.error(
-        "ไฟล์ตัวแบบไม่ใช่ Pipeline WEB5 — คอลัมน์ที่ตัวแบบต้องการคือ "
-        f"{model_features} แต่ระบบส่ง {WEB5_FEATURES}"
-    )
-    st.stop()
-
-CANCEL_INDEX = list(model.classes_).index(1)
-
-
-def risk_level(p):
-    """แบ่งระดับความเสี่ยงตามเกณฑ์ในหัวข้อ 2.6"""
-    if p >= T_HIGH:
-        return "cancel", "🔴", "ความเสี่ยงสูง", "ควรติดต่อยืนยันการจอง หรือพิจารณาในการวางแผนรับจองเกิน"
-    if p <= T_LOW:
-        return "keep", "🟢", "ความเสี่ยงต่ำ", "มีแนวโน้มเข้าพักตามที่จอง"
-    return "warn", "🟡", "ความเสี่ยงปานกลาง", "ควรติดตามการจองนี้ใกล้ชิด"
+def minmax(x, lo, hi):
+    return (x - lo) / (hi - lo)
 
 
 # ---------------- สไตล์ ----------------
@@ -131,7 +107,6 @@ html, body, [class*="css"], .stMarkdown, .stButton button, label, input {
 .result .icon  { font-size: 3rem; line-height: 1; }
 .result .label { font-size: .95rem; opacity: .9; }
 .result .title { font-size: 1.6rem; font-weight: 700; }
-.result .advice { font-size: .95rem; margin-top: 2px; }
 .bar { background: rgba(255,255,255,.3); border-radius: 99px; height: 10px; margin-top: 10px; }
 .bar > div { background: #fff; height: 100%; border-radius: 99px; }
 .pct { font-size: .95rem; margin-top: 6px; }
@@ -143,8 +118,8 @@ html, body, [class*="css"], .stMarkdown, .stButton button, label, input {
 st.markdown(
     """
 <div class="hero">
-  <h1>🏨 ประเมินความเสี่ยงการยกเลิกการจอง</h1>
-  <p>กรอกข้อมูลการจอง แล้วให้ตัวแบบประเมินโอกาสที่ลูกค้าจะยกเลิก</p>
+  <h1>🏨 ทำนายการยกเลิกการจองโรงแรม</h1>
+  <p>กรอกข้อมูลการจอง แล้วให้โมเดลประเมินโอกาสที่ลูกค้าจะยกเลิก</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -154,8 +129,8 @@ st.markdown(
 with st.form("booking"):
     st.markdown('<div class="section">📅 ข้อมูลการจอง</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
-    lead_time = c1.number_input("จองล่วงหน้า (วัน)", min_value=0, max_value=737, value=30)
-    adr = c2.number_input("ราคาเฉลี่ยต่อคืน (ADR)", min_value=0.0, value=100.0, step=5.0)
+    lead_time = c1.number_input("จองล่วงหน้า (วัน)", min_value=0, max_value=int(LEAD_TIME_MAX), value=30)
+    adr = c2.number_input("ราคาเฉลี่ยต่อคืน (ADR)", min_value=0.0, max_value=ADR_MAX, value=100.0, step=5.0)
 
     st.markdown('<div class="section">👨‍👩‍👧 จำนวนผู้เข้าพัก</div>', unsafe_allow_html=True)
     c3, c4, c5 = st.columns(3)
@@ -172,47 +147,39 @@ with st.form("booking"):
 
 # ---------------- ทำนาย ----------------
 if submitted:
-    family_size = adults + children + babies
-    if family_size == 0:
-        st.warning("กรุณาระบุจำนวนผู้เข้าพักอย่างน้อย 1 คน")
-        st.stop()
+    row = dict.fromkeys(FEATURES, 0.0)
+    row["lead_time"] = minmax(lead_time, LEAD_TIME_MIN, LEAD_TIME_MAX)
+    row["adr"] = minmax(adr, ADR_MIN, ADR_MAX)
+    row["FamilySize"] = float(adults + children + babies)
+    room_col = f"reserved_room_type_{ROOM_TYPES[room_label]}"
+    if room_col in row:
+        row[room_col] = 1.0
+    country_code = COUNTRIES[country_label]
+    if country_code is not None and f"country_{country_code}" in row:
+        row[f"country_{country_code}"] = 1.0
 
-    # จำกัด ADR ไม่เกินขอบบนจากชุดฝึก แล้วส่งค่าดิบให้ Pipeline (หัวข้อ 2.7)
-    adr_used = min(float(adr), ADR_CAP)
+    X = pd.DataFrame([row], columns=FEATURES)
+    pred = int(model.predict(X)[0])
+    p_cancel = float(model.predict_proba(X)[0][list(model.classes_).index(1)])
 
-    X = pd.DataFrame(
-        [{
-            "lead_time": float(lead_time),
-            "adr": adr_used,
-            "FamilySize": float(family_size),
-            "reserved_room_type": ROOM_TYPES[room_label],
-            "country": COUNTRIES[country_label],
-        }]
-    )[model_features]
-
-    p_cancel = float(model.predict_proba(X)[0][CANCEL_INDEX])
-    cls, icon, title, advice = risk_level(p_cancel)
+    if p_cancel >= 0.6:
+        cls, icon, title = "cancel", "❌", "มีแนวโน้มยกเลิกการจอง"
+    elif p_cancel <= 0.4:
+        cls, icon, title = "keep", "✅", "มีแนวโน้มเข้าพักตามจอง"
+    else:
+        cls, icon, title = "warn", "⚠️", "ก้ำกึ่ง ควรติดตามใกล้ชิด"
 
     st.markdown(
         f"""
 <div class="result {cls}">
   <div class="icon">{icon}</div>
   <div style="flex:1">
-    <div class="label">ผลการประเมิน</div>
+    <div class="label">ผลการทำนาย</div>
     <div class="title">{title}</div>
-    <div class="advice">{advice}</div>
     <div class="bar"><div style="width:{p_cancel*100:.1f}%"></div></div>
     <div class="pct">โอกาสยกเลิก {p_cancel:.1%}</div>
   </div>
 </div>
 """,
         unsafe_allow_html=True,
-    )
-
-    if adr > ADR_CAP:
-        st.caption(f"ราคาเกิน {ADR_CAP:,.3f} ระบบใช้ค่า {ADR_CAP:,.3f} ในการคำนวณ (ขอบบนจากชุดฝึก)")
-
-    st.caption(
-        f"ระดับความเสี่ยง: ต่ำ (≤ {T_LOW:.2f}) · ปานกลาง · สูง (≥ {T_HIGH:.2f}) — "
-        "ระดับสูงหมายถึงโอกาสยกเลิกสูงกว่าค่าเฉลี่ย ไม่ได้หมายความว่าจะยกเลิกแน่นอน"
     )

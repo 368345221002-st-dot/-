@@ -1,8 +1,8 @@
 """
-ระบบเว็บทำนายความเสี่ยงการยกเลิกการจองโรงแรม (ฉบับ V2)
+ระบบเว็บทำนายความเสี่ยงการยกเลิกการจองโรงแรม (ฉบับ V3)
 
 โหลด Pipeline ของตัวแบบ WEB5 + HGB ที่บันทึกจากโน้ตบุ๊กการทดลอง
-ซึ่งเป็นไฟล์เดียวกับที่ใช้รายงานผลในบทความ (หัวข้อ 2.7, 3.6)
+ซึ่งเป็นไฟล์เดียวกับที่ใช้รายงานผลในบทความ (หัวข้อ 2.7, 3.6) คัดลอกจาก Code/V3/results/
 
 ฟีเจอร์ WEB5 (ค่าดิบ ไม่ต้องสเกลเอง Pipeline จัดการให้):
     lead_time, adr, FamilySize, reserved_room_type, country
@@ -21,7 +21,7 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_NAME = "hgb_web5_pipeline.joblib"
 MODEL_PATH = os.path.join(APP_DIR, MODEL_NAME)
 
-# ขอบบน ADR ที่คำนวณจากชุดฝึก (หัวข้อ 2.2) — ต้องตรงกับ adr_cap ใน results_data.json
+# ขอบบน ADR ที่คำนวณจากชุดฝึก (หัวข้อ 2.2) — ต้องตรงกับคีย์ data → adr_upper_iqr_train ใน results_data.json
 ADR_CAP = 227.388
 
 # เกณฑ์ระดับความเสี่ยงเชิงปฏิบัติ (หัวข้อ 2.6)
